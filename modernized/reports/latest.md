@@ -1,15 +1,15 @@
 # GenApp Post-Deployment Functional Test Report
 
-- **Timestamp (UTC):** 2026-11-20T11:08:33.436Z
-- **Commit SHA:** 4439e9aacd330403d6777b992b8d2c0b6d899048
+- **Timestamp (UTC):** 2026-11-20T11:19:52.314Z
+- **Commit SHA:** 2a90763ac06e86fa217c403921f3185de1f800c9
 - **Backend URL:** https://genapp-backend-ziqswljzga-uc.a.run.app
-- **Frontend URL:** (not set)
+- **Frontend URL:** https://genapp-frontend-ziqswljzga-uc.a.run.app
 
 ## Summary
 
 | Total | Passed | Failed | Skipped | Score |
 | --- | --- | --- | --- | --- |
-| 19 | 18 | 0 | 1 | 94.7% |
+| 21 | 21 | 0 | 0 | 100% |
 
 ## Results
 
@@ -33,4 +33,6 @@
 | 16 | commercial search by postcode returns seeded policy | PASSED |  |
 | 17 | commercial update is unsupported (RC 99 / HTTP 400) | PASSED |  |
 | 18 | unknown policy type returns RC 99 / HTTP 400 | PASSED |  |
-| 19 | frontend checks | SKIPPED | FRONTEND_URL not set |
+| 19 | frontend serves the SPA | PASSED |  |
+| 20 | frontend /api proxy reaches backend | PASSED |  |
+| 21 | frontend negative path returns RC 01 through proxy | PASSED |  |
