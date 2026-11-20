@@ -100,7 +100,7 @@ const CONFIGS: Record<string, TypeConfig> = {
 type Tab = 'inquire' | 'add' | 'update' | 'delete' | 'search';
 
 const NUMERIC = new Set([
-  'value', 'cc', 'yearOfManufacture', 'premium', 'accidents', 'term', 'sumAssured',
+  'value', 'cc', 'premium', 'accidents', 'term', 'sumAssured',
   'bedrooms', 'status', 'firePeril', 'firePremium', 'crimePeril', 'crimePremium',
   'floodPeril', 'floodPremium', 'weatherPeril', 'weatherPremium', 'payment', 'brokerId',
 ]);
