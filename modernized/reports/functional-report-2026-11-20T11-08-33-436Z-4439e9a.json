@@ -1,0 +1,106 @@
+{
+  "timestamp": "2026-11-20T11:08:33.436Z",
+  "sha": "4439e9aacd330403d6777b992b8d2c0b6d899048",
+  "total": 19,
+  "passed": 18,
+  "failed": 0,
+  "skipped": 1,
+  "score": 94.7,
+  "results": [
+    {
+      "name": "backend health endpoint returns UP",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "seeded customer 1 inquire (Andrew Pandy)",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "unknown customer returns RC 01 / HTTP 404",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "customer add allocates identity number >= 1000001",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "added customer is retrievable",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "customer field length validation returns RC 98 / HTTP 400",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "customer update replaces fields",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "seeded motor policy inquire (customer 2, policy 1)",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "unknown policy returns RC 01 / HTTP 404",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "policy type mismatch returns RC 01 / HTTP 404",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "policy add for missing customer returns RC 70 / HTTP 422",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "motor policy add allocates identity number",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "policy update with stale lastChanged returns RC 02 / HTTP 409",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "policy update with current lastChanged succeeds",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "policy delete removes the policy",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "commercial search by postcode returns seeded policy",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "commercial update is unsupported (RC 99 / HTTP 400)",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "unknown policy type returns RC 99 / HTTP 400",
+      "status": "passed",
+      "detail": ""
+    },
+    {
+      "name": "frontend checks",
+      "status": "skipped",
+      "detail": "FRONTEND_URL not set"
+    }
+  ]
+}
