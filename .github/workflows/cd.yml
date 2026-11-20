@@ -1,0 +1,159 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: us-central1
+  AR_REPO: genapp
+  # The commit that passed CI (workflow_run head), not the default-branch tip.
+  COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  gcp-auth:
+    name: GCP authentication
+    # Only deploy commits that CI validated on THIS repository's main branch
+    # (push events). Pull requests — including forks — never reach deployment.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+  publish-images:
+    name: Artifact Registry publish
+    needs: gcp-auth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Ensure Artifact Registry repository
+        run: |
+          gcloud artifacts repositories describe ${{ env.AR_REPO }} \
+            --location ${{ env.GCP_REGION }} --project ${{ vars.GCP_PROJECT_ID }} \
+          || gcloud artifacts repositories create ${{ env.AR_REPO }} \
+            --repository-format docker --location ${{ env.GCP_REGION }} \
+            --project ${{ vars.GCP_PROJECT_ID }}
+      - name: Build and push backend image
+        run: |
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/backend
+          docker build -t $IMAGE:${{ env.COMMIT_SHA }} -t $IMAGE:latest modernized/backend
+          docker push $IMAGE:${{ env.COMMIT_SHA }}
+          docker push $IMAGE:latest
+      - name: Build and push frontend image
+        run: |
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/frontend
+          docker build -t $IMAGE:${{ env.COMMIT_SHA }} -t $IMAGE:latest modernized/frontend
+          docker push $IMAGE:${{ env.COMMIT_SHA }}
+          docker push $IMAGE:latest
+
+  deploy-backend:
+    name: Cloud Run deploy (backend)
+    needs: publish-images
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: genapp-backend
+          region: ${{ env.GCP_REGION }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/backend:${{ env.COMMIT_SHA }}
+          flags: --allow-unauthenticated
+
+  deploy-frontend:
+    name: Cloud Run deploy (frontend)
+    needs: [publish-images, deploy-backend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: genapp-frontend
+          region: ${{ env.GCP_REGION }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ env.COMMIT_SHA }}
+          flags: --allow-unauthenticated
+          env_vars: BACKEND_URL=${{ needs.deploy-backend.outputs.url }}
+
+  functional-tests:
+    name: Post-deployment functional tests
+    needs: [deploy-frontend, deploy-backend]
+    if: always() && needs.deploy-frontend.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run functional tests against deployed services
+        env:
+          FRONTEND_URL: ${{ needs.deploy-frontend.outputs.url }}
+          BACKEND_URL: ${{ needs.deploy-backend.outputs.url }}
+          GITHUB_SHA: ${{ env.COMMIT_SHA }}
+        run: node modernized/scripts/functional-test.mjs
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-report
+          path: modernized/reports/
+          if-no-files-found: warn
+
+  publish-report:
+    name: Commit functional report
+    needs: functional-tests
+    if: always() && needs.functional-tests.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: functional-report
+          path: modernized/reports/
+        continue-on-error: true
+      - name: Commit report without retriggering CI/CD
+        run: |
+          if [ -n "$(git status --porcelain modernized/reports)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add modernized/reports
+            git commit -m "test: functional report for ${COMMIT_SHA:0:7} [skip ci]"
+            git push
+          else
+            echo "No report changes to commit"
+          fi
