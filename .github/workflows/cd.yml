@@ -1,0 +1,142 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+env:
+  GCP_REGION: us-central1
+  AR_REPO: genapp
+
+jobs:
+  gcp-auth:
+    name: GCP authentication
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      project_id: ${{ steps.auth.outputs.project_id }}
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Resolve project
+        run: |
+          echo "project_id=${{ vars.GCP_PROJECT_ID }}" >> "$GITHUB_OUTPUT"
+
+  publish-images:
+    name: Artifact Registry publish
+    needs: gcp-auth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+      - name: Ensure Artifact Registry repository
+        run: |
+          gcloud artifacts repositories describe ${{ env.AR_REPO }} \
+            --location ${{ env.GCP_REGION }} --project ${{ needs.gcp-auth.outputs.project_id }} \
+          || gcloud artifacts repositories create ${{ env.AR_REPO }} \
+            --repository-format docker --location ${{ env.GCP_REGION }} \
+            --project ${{ needs.gcp-auth.outputs.project_id }}
+      - name: Build and push backend image
+        run: |
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ needs.gcp-auth.outputs.project_id }}/${{ env.AR_REPO }}/backend
+          docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest modernized/backend
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+      - name: Build and push frontend image
+        run: |
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ needs.gcp-auth.outputs.project_id }}/${{ env.AR_REPO }}/frontend
+          docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest modernized/frontend
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+  deploy-backend:
+    name: Cloud Run deploy (backend)
+    needs: publish-images
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: genapp-backend
+          region: ${{ env.GCP_REGION }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ needs.gcp-auth.outputs.project_id }}/${{ env.AR_REPO }}/backend:${{ github.sha }}
+          flags: --allow-unauthenticated
+
+  deploy-frontend:
+    name: Cloud Run deploy (frontend)
+    needs: [publish-images, deploy-backend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: genapp-frontend
+          region: ${{ env.GCP_REGION }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ needs.gcp-auth.outputs.project_id }}/${{ env.AR_REPO }}/frontend:${{ github.sha }}
+          flags: --allow-unauthenticated
+          env_vars: BACKEND_URL=${{ needs.deploy-backend.outputs.url }}
+
+  functional-tests:
+    name: Post-deployment functional tests
+    needs: [deploy-frontend, deploy-backend]
+    if: always() && needs.deploy-frontend.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run functional tests against deployed services
+        env:
+          FRONTEND_URL: ${{ needs.deploy-frontend.outputs.url }}
+          BACKEND_URL: ${{ needs.deploy-backend.outputs.url }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: node modernized/scripts/functional-test.mjs
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-report
+          path: modernized/reports/
+          if-no-files-found: warn
+
+  publish-report:
+    name: Commit functional report
+    needs: functional-tests
+    if: always() && needs.functional-tests.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: functional-report
+          path: modernized/reports/
+        continue-on-error: true
+      - name: Commit report without retriggering CI/CD
+        run: |
+          if [ -n "$(git status --porcelain modernized/reports)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add modernized/reports
+            git commit -m "test: functional report for ${GITHUB_SHA:0:7} [skip ci]"
+            git push
+          else
+            echo "No report changes to commit"
+          fi
